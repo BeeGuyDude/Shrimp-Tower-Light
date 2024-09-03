@@ -1,6 +1,6 @@
 #include <Adafruit_NeoPixel.h>
 #include "RTClib.h"
-#include "WiFi.h"
+#include <esp_wifi.h>
 #include "ESPAsyncWebServer.h"
 
 //LED Ring Configs
@@ -32,7 +32,6 @@ AsyncWebServer server(69);
 double maxOperatingBrightness = 0;
 double brightness = 0;
 bool manualOverrideTriggered = false;
-bool wasDaytime = false;
 DateTime now;
 
 //TUNING CONSTANTS
@@ -45,7 +44,7 @@ DateTime now;
 #define MOONSET_HOUR 2
 
 //WIFI CONSTANTS
-const char* ssid = "Shrimpternet Core";
+const char* ssid = "Shrimpternet Beacon";
 const char* password = "pimpshrimpin";
 
 //DAYLIGHT STATE STORAGE
@@ -76,6 +75,7 @@ void setup() {
   Serial.println("");
   Serial.print("IP Address: ");
   Serial.println(WiFi.softAPIP());
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   //WebServer Request Handling
   server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -278,12 +278,12 @@ void debugCycleLEDs() {
     largeRings.setPixelColor(i, WARM_WHITE);
     // largeRings.setLedColor(i, WHITE);
     largeRings.show();
-    delay(75);
+    delay(100);
   }
   for (int i = 0; i < smallRing.numPixels(); i++) {
     smallRing.setPixelColor(i, WARM_WHITE_GRBW);
     smallRing.show();
-    delay(100);
+    delay(150);
   }
   delay(500);
   largeRings.fill(largeRings.Color(0,0,0));
