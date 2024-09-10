@@ -9,7 +9,7 @@
 #define SMALL_LED_PIN   8
 #define SMALL_LED_COUNT 7
 const int MAX_DAYTIME_BRIGHTNESS {102};
-const int MAX_NIGHTTIME_BRIGHTNESS {12};
+const int MAX_NIGHTTIME_BRIGHTNESS {20};
 
 //LED Color Hex Codes
 uint32_t RED = 0xFF0000;
@@ -26,7 +26,7 @@ RTC_DS1307 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 Adafruit_NeoPixel largeRings(LARGE_LED_COUNT, LARGE_LED_PIN, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel smallRing(SMALL_LED_COUNT, SMALL_LED_PIN, NEO_GRBW + NEO_KHZ800);
-AsyncWebServer server(69);
+AsyncWebServer server(80);
 
 //Working (Global) Variables  
 double maxOperatingBrightness = 0;
@@ -207,22 +207,22 @@ void loop() {
 void updateDaylightPeriod() {
   switch(daylightState) {
     case SUNRISE:
-      if (now.hour() > SUNRISE_HOUR) daylightState = SUNLIGHT;
+      if (now.hour() != SUNRISE_HOUR) daylightState = SUNLIGHT;
       break;
     case SUNLIGHT:
       if (now.hour() == SUNSET_HOUR) daylightState = SUNSET;
       break;
     case SUNSET:
-      if (now.hour() > SUNSET_HOUR) daylightState = DARK;
+      if (now.hour() != SUNSET_HOUR) daylightState = DARK;
       break;
     case MOONRISE:
-      if (now.hour() > MOONRISE_HOUR) daylightState = MOONLIGHT;
+      if (now.hour() != MOONRISE_HOUR) daylightState = MOONLIGHT;
       break;
     case MOONLIGHT:
       if (now.hour() == MOONSET_HOUR) daylightState = MOONSET;
       break;
     case MOONSET:
-      if (now.hour() > MOONSET_HOUR) daylightState = DARK;
+      if (now.hour() != MOONSET_HOUR) daylightState = DARK;
       break;
     case DARK:
       if (now.hour() == MOONRISE_HOUR) {
