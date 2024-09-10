@@ -4,14 +4,15 @@
 #include "ESPAsyncWebServer.h"
 
 #include <vector>
+#include <map>
 
 //LED Ring Configs
 #define LARGE_LED_PIN   10
 #define LARGE_LED_COUNT 24
 #define SMALL_LED_PIN   8
 #define SMALL_LED_COUNT 7
-const int MAX_DAYTIME_BRIGHTNESS {102};
-const int MAX_NIGHTTIME_BRIGHTNESS {20};
+const double MAX_SUNLIGHT_BRIGHTNESS {0.4};
+const double MAX_MOONLIGHT_BRIGHTNESS {0.08};
 
 //LED Color Hex Codes
 uint32_t RED = 0xFF0000;
@@ -60,6 +61,16 @@ typedef enum {
   DARK
 } DaylightState;
 DaylightState daylightState;
+//Store strings for states for ease of debugging
+std::map<DaylightState, String> daylightStateStrings{
+  {SUNRISE, "Sunrise"},
+  {SUNLIGHT, "Sunlight"},
+  {SUNSET, "Sunset"},
+  {MOONRISE, "Moonrise"},
+  {MOONLIGHT, "Moonlight"},
+  {MOONSET, "Moonset"},
+  {DARK, "Dark"}
+};
 
 void setup() {
   Serial.begin(115200);
@@ -106,7 +117,6 @@ void setup() {
   now = rtc.now();
 
   //Daylight period state initialization
-  bool isDaytime = true;
   if (now.hour() == SUNRISE_HOUR) {
     daylightState = SUNRISE;
   } else if (now.hour() > SUNRISE_HOUR && now.hour() < SUNSET_HOUR) {
@@ -114,23 +124,13 @@ void setup() {
   } else if (now.hour() == SUNSET_HOUR) {
     daylightState = SUNSET;
   } else if (now.hour() == MOONRISE_HOUR) {
-    isDaytime = false;
     daylightState = MOONRISE;
   } else if (now.hour() > MOONRISE_HOUR || now.hour() < MOONSET_HOUR) {
-    isDaytime = false;
     daylightState = MOONLIGHT;
   } else if (now.hour() == MOONSET_HOUR) {
-    isDaytime = false;
     daylightState = MOONSET;
   } else {
     daylightState = DARK;
-  }
-  if (isDaytime) {
-    setDaytimeColorProfile(0);
-    maxOperatingBrightness = MAX_DAYTIME_BRIGHTNESS;
-  } else {
-    setNighttimeColorProfile(0);
-    maxOperatingBrightness = MAX_NIGHTTIME_BRIGHTNESS;
   }
   server.begin();
 
@@ -155,39 +155,35 @@ void loop() {
 
   //Daylight period state check
   updateDaylightPeriod();
-
-  //Brightness update based on daylight period
   Serial.print("IT IS CURRENTLY: ");
+  Serial.println(getDaylightPeriodState());
+
+  //Brightness/color update based on daylight period
   switch(daylightState) {
     case SUNRISE:
-      brightness = (now.minute() / 60.0f) * maxOperatingBrightness;
-      Serial.print("SUNRISE");
+      setSunlightColorProfile(now.minute() / 60.0f);
       break;
     case SUNLIGHT:
-      brightness = maxOperatingBrightness;
-      Serial.print("SUNLIGHT");
+      setSunlightColorProfile(1);
       break;
     case SUNSET:
-      brightness = ((60 - now.minute()) / 60.0f) * maxOperatingBrightness;
-      Serial.print("SUNSET");
+      setSunlightColorProfile((60 - now.minute()) / 60.0f);
       break;
     case MOONRISE:
-      brightness = (now.minute() / 60.0f) * maxOperatingBrightness;
-      Serial.print("MOONRISE");
+      setMoonlightColorProfile(now.minute() / 60.0f);
       break;
     case MOONLIGHT:
-      brightness = maxOperatingBrightness;
-      Serial.print("MOONLIGHT");
+      setMoonlightColorProfile(1);
       break;
     case MOONSET:
-      brightness = ((60 - now.minute()) / 60.0f) * maxOperatingBrightness;
-      Serial.print("MOONSET");
+      setMoonlightColorProfile((60 - now.minute()) / 60.0f);
       break;
     case DARK:
-      brightness = 0;
-      Serial.print("DARK");
+      setDarknessColorProfile();
       break;
   }
+  largeRings.show();
+  smallRing.show();
 
   Serial.print(" | Brightness Target: ");
   Serial.print(brightness);
@@ -228,12 +224,8 @@ void updateDaylightPeriod() {
       break;
     case DARK:
       if (now.hour() == MOONRISE_HOUR) {
-        setNighttimeColorProfile(0);
-        maxOperatingBrightness = MAX_NIGHTTIME_BRIGHTNESS;
         daylightState = MOONRISE;
       } else if (now.hour() == SUNRISE_HOUR) {
-        setDaytimeColorProfile(0);
-        maxOperatingBrightness = MAX_DAYTIME_BRIGHTNESS;
         daylightState = SUNRISE;
       }
       break;
@@ -247,41 +239,50 @@ void updateBrightness(int brightness) {
   smallRing.show();
 }
 
-void setDaytimeColorProfile(int brightness) {
+void setSunlightColorProfile(double brightnessPercentage) {
   //Large ring full spectrum lighting
   for (int i = 0; i < LARGE_LED_COUNT; i++) {
     if (i % 8 == 0) {
-      largeRings.setPixelColor(i, RED);
+      largeRings.setPixelColor(i, brightnessScaleHex(RED, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS));
     } else if ((i + 2) % 8 == 0) {
-      largeRings.setPixelColor(i, GREEN);
+      largeRings.setPixelColor(i, brightnessScaleHex(GREEN, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS));
     } else if ((i + 5) % 8 == 0) {
       // largeRings.setPixelColor(i, BLUE);
-      largeRings.setPixelColor(i, WARM_WHITE);
+      largeRings.setPixelColor(i, brightnessScaleHex(WARM_WHITE, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS));
     } else {
-      largeRings.setPixelColor(i, WARM_WHITE);
+      largeRings.setPixelColor(i, brightnessScaleHex(WARM_WHITE, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS));
     }
   }
 
   //Small ring full white
   for (int i = 0; i < SMALL_LED_COUNT; i++) {
-    smallRing.setPixelColor(i, WARM_WHITE_GRBW);
+    smallRing.setPixelColor(i, brightnessScaleHex(WARM_WHITE_GRBW, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS));
   }
 
   largeRings.show();
   smallRing.show();
 }
 
-void setNighttimeColorProfile(int brightness) {
+void setMoonlightColorProfile(double brightnessPercentage) {
   //Set both rings to deep blue
-  for (int i = 0; i < LARGE_LED_COUNT; i++) largeRings.setPixelColor(i, NIGHTTIME_BLUE);
-  for (int i = 0; i < SMALL_LED_COUNT; i++) smallRing.setPixelColor(i, NIGHTTIME_BLUE);
+  for (int i = 0; i < LARGE_LED_COUNT; i++) largeRings.setPixelColor(i, brightnessScaleHex(NIGHTTIME_BLUE, brightnessPercentage * MAX_MOONLIGHT_BRIGHTNESS));
+  for (int i = 0; i < SMALL_LED_COUNT; i++) smallRing.setPixelColor(i, brightnessScaleHex(NIGHTTIME_BLUE, brightnessPercentage * MAX_MOONLIGHT_BRIGHTNESS));
+
+  largeRings.show();
+  smallRing.show();
+}
+
+void setDarknessColorProfile() {
+  //Turn both rings off
+  for (int i = 0; i < LARGE_LED_COUNT; i++) largeRings.setPixelColor(i, 0x000000);
+  for (int i = 0; i < SMALL_LED_COUNT; i++) smallRing.setPixelColor(i, 0x00000000);
 
   largeRings.show();
   smallRing.show();
 }
 
 //Scale hex code color according to brightness and return scaled hex code
-uint32_t brightnessScale(uint32_t hexColor, int brightness) {
+uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
   //Store RGB(W) values in a vector for iterative operations
   std::vector<uint8_t> colorValues{};
 
@@ -292,7 +293,6 @@ uint32_t brightnessScale(uint32_t hexColor, int brightness) {
   }
 
   //Compute brightness percentage and modulate hex code to match it 
-  double brightnessPercentage = brightness/255.0f;
   for (int i = 0; i < numColors; i++) colorValues[i] *= brightnessPercentage;
 
   //Re-pack color values into hex code and return it
@@ -336,6 +336,6 @@ String getOverrideState() {
 }
 
 String getDaylightPeriodState() {
-  return String(daylightState);
+  return daylightStateStrings[daylightState];
 }
 
