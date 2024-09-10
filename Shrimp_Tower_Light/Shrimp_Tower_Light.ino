@@ -32,8 +32,6 @@ Adafruit_NeoPixel smallRing(SMALL_LED_COUNT, SMALL_LED_PIN, NEO_GRBW + NEO_KHZ80
 AsyncWebServer server(80);
 
 //Working (Global) Variables  
-double maxOperatingBrightness = 0;
-double brightness = 0;
 bool manualOverrideTriggered = false;
 DateTime now;
 
@@ -104,11 +102,9 @@ void setup() {
   //Ring Initialization
   largeRings.begin();
   smallRing.begin();
-  debugCycleLEDs();
-
-  //Flush Brightness to impossible value to force initial state update (updateBrightness());
   largeRings.setBrightness(255);
   smallRing.setBrightness(255);
+  debugCycleLEDs();
 
   //RTC configuration
   if (!rtc.begin()) {
@@ -142,6 +138,13 @@ void setup() {
   Serial.print(getDaylightPeriodState());
   Serial.print(" | Override: ");
   Serial.println(getOverrideState());
+
+  //Test Hex color code converter functionality
+  Serial.println("HEX CONVERTER FUNCTION TESTS");
+  Serial.print("Warm White: ");
+  Serial.print(WARM_WHITE);
+  Serial.print(" | WARM WHITE 50%: ");
+  Serial.println(brightnessScaleHex(WARM_WHITE, 0.5));
 
   Serial.println("STARTUP COMPLETED");
   Serial.println("");
@@ -185,19 +188,6 @@ void loop() {
   largeRings.show();
   smallRing.show();
 
-  Serial.print(" | Brightness Target: ");
-  Serial.print(brightness);
-  Serial.print(" | Hardware Brightness: ");
-  Serial.print(largeRings.getBrightness());
-
-  //Update brightness if it has changed
-  Serial.print(" | Changing? ");
-  if (largeRings.getBrightness() != brightness) {
-    updateBrightness(brightness);
-    Serial.println("YES");
-  } else {
-    Serial.println("NO");
-  }
   Serial.println("");
   delay(2000);
 }
@@ -230,13 +220,6 @@ void updateDaylightPeriod() {
       }
       break;
   }
-}
-
-void updateBrightness(int brightness) {
-  largeRings.setBrightness(brightness);
-  smallRing.setBrightness(brightness);
-  largeRings.show();
-  smallRing.show();
 }
 
 void setSunlightColorProfile(double brightnessPercentage) {
@@ -284,12 +267,12 @@ void setDarknessColorProfile() {
 //Scale hex code color according to brightness and return scaled hex code
 uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
   //Store RGB(W) values in a vector for iterative operations
-  std::vector<uint8_t> colorValues{};
+  std::vector<uint32_t> colorValues{};  //uint32_t used instead of 8 to minimize conversion hassle
 
   //Crack hex code color value into individual byte values
   int numColors = (hexColor > 0xFFFFFF) ? 4 : 3;  //Assumes RGBW colors have r value >0
   for (int i = numColors; i > 0; i--) {
-    colorValues.push_back(hexColor >> ((i-1)*8 & 0xFF));  //Use bitmask to extract out each color value
+    colorValues.push_back(uint8_t((hexColor >> (i-1)*8) & 0xFF));  //Use bitmask to extract out each color value
   }
 
   //Compute brightness percentage and modulate hex code to match it 
@@ -298,8 +281,8 @@ uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
   //Re-pack color values into hex code and return it
   uint32_t modifiedHexColor = 0x0000000;
   for (int i = 0; i < numColors; i++) {
-    modifiedHexColor << i*8;
-    modifiedHexColor | colorValues[i];
+    modifiedHexColor = modifiedHexColor << 8;
+    modifiedHexColor |= colorValues[i];
   }
   return modifiedHexColor;
 }
