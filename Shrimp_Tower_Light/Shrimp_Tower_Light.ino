@@ -3,6 +3,8 @@
 #include <esp_wifi.h>
 #include "ESPAsyncWebServer.h"
 
+#include <vector>
+
 //LED Ring Configs
 #define LARGE_LED_PIN   10
 #define LARGE_LED_COUNT 24
@@ -16,8 +18,8 @@ uint32_t RED = 0xFF0000;
 uint32_t GREEN = 0x00FF00;
 uint32_t BLUE = 0x0000FF;
 uint32_t NIGHTTIME_BLUE = 0x3300FF;
+uint32_t NIGHTTIME_BLUE_GRBW = 0x3300FF00;
 uint32_t WHITE = 0xFFFFFF;
-// uint32_t WARM_WHITE = 0xCFA6FF;
 uint32_t WARM_WHITE = 0xFFBA6A;
 uint32_t WARM_WHITE_GRBW = 0xCFA6FFFF;
 
@@ -124,10 +126,10 @@ void setup() {
     daylightState = DARK;
   }
   if (isDaytime) {
-    setDaytimeColorProfile();
+    setDaytimeColorProfile(0);
     maxOperatingBrightness = MAX_DAYTIME_BRIGHTNESS;
   } else {
-    setNighttimeColorProfile();
+    setNighttimeColorProfile(0);
     maxOperatingBrightness = MAX_NIGHTTIME_BRIGHTNESS;
   }
   server.begin();
@@ -226,11 +228,11 @@ void updateDaylightPeriod() {
       break;
     case DARK:
       if (now.hour() == MOONRISE_HOUR) {
-        setNighttimeColorProfile();
+        setNighttimeColorProfile(0);
         maxOperatingBrightness = MAX_NIGHTTIME_BRIGHTNESS;
         daylightState = MOONRISE;
       } else if (now.hour() == SUNRISE_HOUR) {
-        setDaytimeColorProfile();
+        setDaytimeColorProfile(0);
         maxOperatingBrightness = MAX_DAYTIME_BRIGHTNESS;
         daylightState = SUNRISE;
       }
@@ -245,7 +247,7 @@ void updateBrightness(int brightness) {
   smallRing.show();
 }
 
-void setDaytimeColorProfile() {
+void setDaytimeColorProfile(int brightness) {
   //Large ring full spectrum lighting
   for (int i = 0; i < LARGE_LED_COUNT; i++) {
     if (i % 8 == 0) {
@@ -264,12 +266,42 @@ void setDaytimeColorProfile() {
   for (int i = 0; i < SMALL_LED_COUNT; i++) {
     smallRing.setPixelColor(i, WARM_WHITE_GRBW);
   }
+
+  largeRings.show();
+  smallRing.show();
 }
 
-void setNighttimeColorProfile() {
+void setNighttimeColorProfile(int brightness) {
   //Set both rings to deep blue
   for (int i = 0; i < LARGE_LED_COUNT; i++) largeRings.setPixelColor(i, NIGHTTIME_BLUE);
   for (int i = 0; i < SMALL_LED_COUNT; i++) smallRing.setPixelColor(i, NIGHTTIME_BLUE);
+
+  largeRings.show();
+  smallRing.show();
+}
+
+//Scale hex code color according to brightness and return scaled hex code
+uint32_t brightnessScale(uint32_t hexColor, int brightness) {
+  //Store RGB(W) values in a vector for iterative operations
+  std::vector<uint8_t> colorValues{};
+
+  //Crack hex code color value into individual byte values
+  int numColors = (hexColor > 0xFFFFFF) ? 4 : 3;  //Assumes RGBW colors have r value >0
+  for (int i = numColors; i > 0; i--) {
+    colorValues.push_back(hexColor >> ((i-1)*8 & 0xFF));  //Use bitmask to extract out each color value
+  }
+
+  //Compute brightness percentage and modulate hex code to match it 
+  double brightnessPercentage = brightness/255.0f;
+  for (int i = 0; i < numColors; i++) colorValues[i] *= brightnessPercentage;
+
+  //Re-pack color values into hex code and return it
+  uint32_t modifiedHexColor = 0x0000000;
+  for (int i = 0; i < numColors; i++) {
+    modifiedHexColor << i*8;
+    modifiedHexColor | colorValues[i];
+  }
+  return modifiedHexColor;
 }
 
 void debugCycleLEDs() {
