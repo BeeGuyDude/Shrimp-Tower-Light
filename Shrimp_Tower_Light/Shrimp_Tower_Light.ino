@@ -298,7 +298,11 @@ uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
 
 std::vector<uint32_t> crackHexCodeChannels(uint32_t hexColor, int numChannels) {
   std::vector<uint32_t> colorChannels;
-  for (int i = numChannels; i > 0; i--) colorChannels.push_back(uint8_t((hexColor >> (i-1)*8) & 0xFF));  //Use bitmask to extract out each color value
+  if (numChannels == 3) {   //RGB values, byteshift by one: (i-1)*8
+    for (int i = numChannels; i > 0; i--) colorChannels.push_back(uint8_t((hexColor >> (i-1)*8) & 0xFF));  //Use bitmask to extract out each color value
+  } else {    //RGBW values, crunch normally: (i)*8
+    for (int i = numChannels; i > 0; i--) colorChannels.push_back(uint8_t((hexColor >> (i)*8) & 0xFF));  //Use bitmask to extract out each color value
+  }
   return colorChannels;
 }
 
