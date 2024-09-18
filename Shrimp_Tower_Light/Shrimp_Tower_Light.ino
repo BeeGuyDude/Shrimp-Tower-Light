@@ -15,7 +15,7 @@
 
 const double MAX_SUNLIGHT_BRIGHTNESS  {0.4};
 const double MAX_MOONLIGHT_BRIGHTNESS {0.03};
-const double MAX_OVERRIDE_BRIGHTNESS  {0.3};
+const double MAX_OVERRIDE_BRIGHTNESS  {0.15};
 
 //LED Color Hex Codes
 uint32_t RED = 0xFF0000;
@@ -37,12 +37,14 @@ AsyncWebServer server(80);  //I tried to make this port 69 but HTTP got mad at m
 //Working (Global) Variables  
 bool manualOverrideTriggered = false;
 DateTime now;
+DateTime overrideEndTime;
+
 //Colors stored in two discrete vectors to minimize annoying index offsets when dealing with large and small colorVects
 std::vector<uint32_t> largeRingsColors(LARGE_LED_COUNT, 0x000000);
 std::vector<uint32_t> smallRingColors(SMALL_LED_COUNT, 0x00000000);
 
 //TUNING CONSTANTS
-#define MANUAL_OVERRIDE_TIME_MINUTES 10
+#define MANUAL_OVERRIDE_TIME_MINUTES 5
 #define TRANSITION_FADE_TIME_SECONDS 3
 #define TRANSITION_FADE_STEPS        50
 
@@ -131,7 +133,7 @@ void setup() {
     request->send_P(200, "text/plain", getTime().c_str());
   });
   server.on("/override", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/plain", getOverrideState().c_str());
+    request->send_P(200, "text/plain", getOverrideTime().c_str());
   });
   server.on("/daylight-period", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", getDaylightPeriodState().c_str());
@@ -145,7 +147,7 @@ void setup() {
   Serial.print(" | Daylight Period: ");
   Serial.print(getDaylightPeriodState());
   Serial.print(" | Override: ");
-  Serial.println(getOverrideState());
+  Serial.println(getOverrideTime());
 
   //Test Hex color code converter functionality
   Serial.println("HEX CONVERTER FUNCTION TESTS");
@@ -164,16 +166,27 @@ void loop() {
   DateTime collectedTime = rtc.now();
   if (collectedTime.year() != 2000) now = collectedTime;
 
-  //Daylight period state check
+  //Daylight period state update
   updateDaylightPeriod();
   Serial.print("IT IS CURRENTLY: ");
   Serial.println(getDaylightPeriodState());
 
+  //Color state vects will always be updated periodically, hardware setting is handled below
   updateLightColorStates();
-  updateRingsFromVects();
 
-  Serial.println("");
-  delay(2000);
+  //Update lights based on 
+  if (!manualOverrideTriggered) { //If no override is triggered, update lights as per standard
+    updateRingsFromVects();
+  } else {                        //Override triggered, check if it has ended
+    //Assume lights have already been faded to override setting; fade back down if ended
+    if (now > overrideEndTime) {
+      fadeToVect(largeRingsColors, smallRingColors, TRANSITION_FADE_TIME_SECONDS);
+      manualOverrideTriggered = false;
+    }
+  }
+
+  //Update period delay
+  delay(1000);
 }
 
 void updateDaylightPeriod() {
@@ -535,8 +548,15 @@ String getTime() {
   return timeString;
 }
 
-String getOverrideState() {
-  return String(manualOverrideTriggered);
+String getOverrideTime() {
+  String overrideString;
+  if (manualOverrideTriggered) {
+    TimeSpan timeRemaining = overrideEndTime - now;
+    overrideString = String(timeRemaining.minutes()) + ':' + String(timeRemaining.seconds());
+  } else {
+    overrideString = "00:00";
+  }
+  return String(overrideString);
 }
 
 String getDaylightPeriodState() {
