@@ -286,29 +286,6 @@ void setDarknessColorProfile() {
   for (int i = 0; i < SMALL_LED_COUNT; i++) smallRingColors[i] = 0x00000000; //RGBW 0
 }
 
-//Scale hex code color according to brightness and return scaled hex code
-uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
-  //Store RGB(W) values in a vector for iterative operations
-  std::vector<uint32_t> colorValues{};  //uint32_t used instead of 8 to minimize conversion hassle, yes it's inefficient - sue me.
-
-  //Crack hex code color value into individual byte values
-  int numColors = (hexColor > 0xFFFFFF) ? 4 : 3;  //Assumes RGBW colors have r value >0
-  for (int i = numColors; i > 0; i--) {
-    colorValues.push_back(uint8_t((hexColor >> (i-1)*8) & 0xFF));  //Use bitmask to extract out each color value
-  }
-
-  //Compute brightness percentage and modulate hex code to match it 
-  for (int i = 0; i < numColors; i++) colorValues[i] *= brightnessPercentage;
-
-  //Re-pack color values into hex code and return it
-  uint32_t modifiedHexColor = 0x0000000;
-  for (int i = 0; i < numColors; i++) {
-    modifiedHexColor = modifiedHexColor << 8;
-    modifiedHexColor |= colorValues[i];
-  }
-  return modifiedHexColor;
-}
-
 std::vector<uint32_t> crackHexCodeChannels(uint32_t hexColor, int numChannels) {
   std::vector<uint32_t> colorChannels;
   if (numChannels == 3) {   //RGB values, byteshift by one: (i-1)*8
@@ -412,6 +389,25 @@ void fadeToColor(uint32_t hexColorRGB, uint32_t hexColorRGBW, float fadeSeconds)
     smallRing.show();
     delay(fadeSeconds / TRANSITION_FADE_STEPS * 1000);   //Fade time given as a float value, multiply by 1000 for milliseconds()
   }
+}  //Crack hex code color value into individual byte values
+
+//Scale hex code color according to brightness and return scaled hex code
+uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
+  //Store RGB(W) values in a vector for iterative operations
+  std::vector<uint32_t> colorValues{};  //uint32_t used instead of 8 to minimize conversion hassle, yes it's inefficient - sue me.
+  int numChannels = (hexColor > 0xFFFFFF) ? 4 : 3;  //Assumes RGBW colors have r value >0
+  colorValues = crackHexCodeChannels(hexColor, numChannels);
+
+  //Compute brightness percentage and modulate hex code to match it 
+  for (int i = 0; i < numChannels; i++) colorValues[i] *= brightnessPercentage;
+
+  //Re-pack color values into hex code and return it
+  uint32_t modifiedHexColor = 0x0000000;
+  for (int i = 0; i < numChannels; i++) {  //Crack hex code color value into individual byte values
+    modifiedHexColor = modifiedHexColor << 8;
+    modifiedHexColor |= colorValues[i];
+  }
+  return modifiedHexColor;
 }
 
 //Fade from current color map to pair of uint32_t vectors
