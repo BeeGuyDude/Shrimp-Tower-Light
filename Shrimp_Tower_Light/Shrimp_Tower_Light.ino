@@ -15,7 +15,7 @@
 
 const double MAX_SUNLIGHT_BRIGHTNESS  {0.4};
 const double MAX_MOONLIGHT_BRIGHTNESS {0.03};
-const double MAX_OVERRIDE_BRIGHTNESS  {0.15};
+const double MAX_OVERRIDE_BRIGHTNESS  {0.2};
 
 //LED Color Hex Codes
 uint32_t RED = 0xFF0000;
@@ -35,7 +35,8 @@ Adafruit_NeoPixel smallRing(SMALL_LED_COUNT, SMALL_LED_PIN, NEO_GRBW + NEO_KHZ80
 AsyncWebServer server(80);  //I tried to make this port 69 but HTTP got mad at me, boowomp
 
 //Working (Global) Variables  
-bool manualOverrideTriggered = false;
+bool manualOverrideRequested = false; //Stores button presses
+bool manualOverrideTriggered = false; //Stores current override state
 DateTime now;
 DateTime overrideEndTime;
 
@@ -46,7 +47,8 @@ std::vector<uint32_t> smallRingColors(SMALL_LED_COUNT, 0x00000000);
 //TUNING CONSTANTS
 #define MANUAL_OVERRIDE_TIME_MINUTES 5
 #define TRANSITION_FADE_TIME_SECONDS 3
-#define TRANSITION_FADE_STEPS        50
+#define TRANSITION_FADE_STEPS        100
+#define OVERRIDE_REQUEST_RETURN_STRING "it's that shrimple"
 
 #define SUNRISE_HOUR 10
 #define SUNSET_HOUR 19
@@ -56,9 +58,10 @@ std::vector<uint32_t> smallRingColors(SMALL_LED_COUNT, 0x00000000);
 //WIFI CONSTANTS
 const char* ssid = "Shrimpternet Beacon";
 const char* password = "pimpshrimpin";
-const String timeEndpointString = "/time";
-const String periodStateEndpointString = "/daylight-period";
-const String overrideEndpointString = "/override";
+const char* timeEndpointString = "/time";
+const char* periodStateEndpointString = "/daylight-period";
+const char* overrideEndpointString = "/override";
+const char* overrideEndpointSetString = "/override-set";
 
 //DAYLIGHT STATE STORAGE
 typedef enum {
@@ -129,16 +132,19 @@ void setup() {
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   //WebServer Request Handling
-  server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on(timeEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", getTime().c_str());
   });
-  server.on("/override", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/plain", getOverrideTime().c_str());
-  });
-  server.on("/daylight-period", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on(periodStateEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", getDaylightPeriodState().c_str());
   });
   server.begin();
+  server.on(overrideEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/plain", getOverrideTime().c_str());
+  });
+  server.on(overrideEndpointSetString, HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/plain", setOverrideTime().c_str());
+  });
 
   //Test String converter functions for use in HTTP requests
   Serial.println("STRING CONVERTER FUNCTION TESTS");
@@ -174,8 +180,23 @@ void loop() {
   //Color state vects will always be updated periodically, hardware setting is handled below
   updateLightColorStates();
 
-  //Update lights based on 
+  //If override requested, fade to override brightness
+  if (manualOverrideRequested) {
+    if (!manualOverrideTriggered) {
+      setSunlightColorProfile(MAX_OVERRIDE_BRIGHTNESS);
+      fadeToVect(largeRingsColors, smallRingColors, TRANSITION_FADE_TIME_SECONDS);
+      manualOverrideTriggered = true;
+    } 
+    overrideEndTime = now + TimeSpan(0, 0, MANUAL_OVERRIDE_TIME_MINUTES, 0);
+    manualOverrideRequested = false;
+  }
+
+  Serial.print("MANUAL OVERRIDE REQUESTED: ");
+  Serial.println(manualOverrideTriggered);
+
+  //Update lights based on if manual override is in progress or not
   if (!manualOverrideTriggered) { //If no override is triggered, update lights as per standard
+    Serial.println("UPDATING RINGS FROM COLOR VECTORS");
     updateRingsFromVects();
   } else {                        //Override triggered, check if it has ended
     //Assume lights have already been faded to override setting; fade back down if ended
@@ -187,6 +208,7 @@ void loop() {
 
   //Update period delay
   delay(1000);
+  Serial.println("");
 }
 
 void updateDaylightPeriod() {
@@ -219,6 +241,7 @@ void updateDaylightPeriod() {
   }
 }
 
+//Set color map vectors based on the current daylight period
 void updateLightColorStates() {
   switch(daylightState) {
     case SUNRISE:
@@ -504,7 +527,7 @@ void debugCycleLEDs() {
   Serial.println("Debug cycling LEDs...");
   //Initial circular boot cycle
   for (int i = 0; i < 24; i++) {
-    largeRings.setPixelColor(i, WARM_WHITE);
+    largeRings.setPixelColor(i, brightnessScaleHex(WARM_WHITE, MAX_OVERRIDE_BRIGHTNESS));
     // largeRings.setLedColor(i, WHITE);
     largeRings.show();
     delay(100);
@@ -550,12 +573,21 @@ String getOverrideTime() {
     TimeSpan timeRemaining = overrideEndTime - now;
     overrideString = String(timeRemaining.minutes()) + ':' + String(timeRemaining.seconds());
   } else {
-    overrideString = "00:00";
+    overrideString = "Disabled";
   }
   return String(overrideString);
 }
 
+String setOverrideTime() {
+  manualOverrideRequested = true;
+  return OVERRIDE_REQUEST_RETURN_STRING;
+}
+
 String getDaylightPeriodState() {
-  return daylightStateStrings[daylightState];
+  if (!manualOverrideTriggered) {
+    return daylightStateStrings[daylightState];
+  } else {
+    return "!OVERRIDE!";
+  }
 }
 
