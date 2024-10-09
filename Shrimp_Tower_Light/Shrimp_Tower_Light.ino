@@ -92,7 +92,7 @@ void setup() {
 
   //RTC configuration
   if (!rtc.begin()) {
-    Serial.println("FUCK FUCK FUCK FUCK TIME IS FUCKED GOD WE'RE ALL DAMNED TO ETERNITY");
+    Serial.println("System has failed to grasp the concept of time, please introduce it to organized religion (or Descartes)");
   }
   now = rtc.now();
 
@@ -125,13 +125,12 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
   Serial.println("Wifi Broadcasting...");
-
   Serial.println("");
   Serial.print("IP Address: ");
   Serial.println(WiFi.softAPIP());
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
-  //WebServer Request Handling
+  //WebServer HTTP request handling
   server.on(timeEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", getTime().c_str());
   });
@@ -142,11 +141,12 @@ void setup() {
   server.on(overrideEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", getOverrideTime().c_str());
   });
+  //This request is unique in that it returns information but also sets a system flag, see setOverrideTime() method
   server.on(overrideEndpointSetString, HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", setOverrideTime().c_str());
   });
 
-  //Test String converter functions for use in HTTP requests
+  //Test string converter functions for use in HTTP requests
   Serial.println("STRING CONVERTER FUNCTION TESTS");
   Serial.print("Time: ");
   Serial.print(getTime());
@@ -168,7 +168,7 @@ void setup() {
 
 void loop() {
 
-  //Update time from RTC, make sure is valid
+  //Update time from RTC, make sure is valid (If voltage brownout occurs, time will return 00:00 01/01/2000)
   DateTime collectedTime = rtc.now();
   if (collectedTime.year() != 2000) now = collectedTime;
 
@@ -190,7 +190,6 @@ void loop() {
     overrideEndTime = now + TimeSpan(0, 0, MANUAL_OVERRIDE_TIME_MINUTES, 0);
     manualOverrideRequested = false;
   }
-
   Serial.print("MANUAL OVERRIDE REQUESTED: ");
   Serial.println(manualOverrideTriggered);
 
@@ -211,6 +210,7 @@ void loop() {
   Serial.println("");
 }
 
+//Process state transition given current daylight state
 void updateDaylightPeriod() {
   switch(daylightState) {
     case SUNRISE:
@@ -232,6 +232,7 @@ void updateDaylightPeriod() {
       if (now.hour() != MOONSET_HOUR) daylightState = DARK;
       break;
     case DARK:
+      //Dark state occurs both between the (Day --> Night) and (Night --> Day) transitions; thus, it needs edge transitions for both cases
       if (now.hour() == MOONRISE_HOUR) {
         daylightState = MOONRISE;
       } else if (now.hour() == SUNRISE_HOUR) {
@@ -241,7 +242,7 @@ void updateDaylightPeriod() {
   }
 }
 
-//Set color map vectors based on the current daylight period
+//Set normal operation color map vectors based on the current daylight period
 void updateLightColorStates() {
   switch(daylightState) {
     case SUNRISE:
@@ -268,7 +269,7 @@ void updateLightColorStates() {
   }
 }
 
-//Take largeRingsColors and smallRingColors, feed them to the hardware, and update it
+//Take largeRingsColors and (normal operation color state vectors) feed them to the hardware, and update it
 void updateRingsFromVects() { 
   for (int i = 0; i < LARGE_LED_COUNT; i++) largeRings.setPixelColor(i, largeRingsColors[i]);
   for (int i = 0; i < SMALL_LED_COUNT; i++) smallRing.setPixelColor(i, smallRingColors[i]);
@@ -292,7 +293,7 @@ void setSunlightColorProfile(double brightnessPercentage) {
     }
   }
 
-  //Small ring full white
+  //Small ring full white (as it has warm white built-in LEDs)
   for (int i = 0; i < SMALL_LED_COUNT; i++) smallRingColors[i] = brightnessScaleHex(WARM_WHITE_GRBW, brightnessPercentage * MAX_SUNLIGHT_BRIGHTNESS);
 }
 
@@ -309,6 +310,7 @@ void setDarknessColorProfile() {
   for (int i = 0; i < SMALL_LED_COUNT; i++) smallRingColors[i] = 0x00000000; //RGBW 0
 }
 
+//Crack a given uint32_t RGB Hex code and split it into 3/4 channels stored as a vector, in order
 std::vector<uint32_t> crackHexCodeChannels(uint32_t hexColor, int numChannels) {
   std::vector<uint32_t> colorChannels;
   if (numChannels == 3) {   //RGB values, byteshift by one: (i-1)*8
@@ -319,14 +321,17 @@ std::vector<uint32_t> crackHexCodeChannels(uint32_t hexColor, int numChannels) {
   return colorChannels;
 }
 
+//Crack a vector of uint32_t RGB Hex codes via the above function, and return a vector of vectors of their channels
 std::vector<std::vector<uint32_t>> crackHexVectChannels(std::vector<uint32_t> hexColorVect, int numChannels) {
   std::vector<std::vector<uint32_t>> colorChannelsVect;
   for (int i = 0; i < hexColorVect.size(); i++) colorChannelsVect.push_back(crackHexCodeChannels(hexColorVect[i], numChannels));
   return colorChannelsVect;
 }
 
-//Fade from current color map to pair of RGB and RGBW hex codes
+//Fade from current HARDWARE color map to pair of RGB and RGBW hex codes
 void fadeToColor(uint32_t hexColorRGB, uint32_t hexColorRGBW, float fadeSeconds) {
+  //TODO: Refactor this to just populate some vectors with their respective hex codes and call fadeToVect()
+  
   //Dump current hardware color vectors to internal one for processing
   //Yes, there is a method to do this directly; it's an array of uint8_t-s, and that is not worth my time to deal with.
   std::vector<uint32_t> hardwareColorVectLarge;
@@ -395,6 +400,7 @@ void fadeToColor(uint32_t hexColorRGB, uint32_t hexColorRGBW, float fadeSeconds)
         hardwareColorChannelsLarge[i][1] + (float)((channelDiffsVectLarge[i][1] * pow(-1, (int)channelDiffsNegVectLarge[i][1])) / TRANSITION_FADE_STEPS) * (float)step,
         hardwareColorChannelsLarge[i][2] + (float)((channelDiffsVectLarge[i][2] * pow(-1, (int)channelDiffsNegVectLarge[i][2])) / TRANSITION_FADE_STEPS) * (float)step
       ));
+      //TODO: Make this absolute brick slightly more reasonable with a helper function
     }
     for (int i = 0; i < SMALL_LED_COUNT; i++) {
       //largeRings.Color() compiles RGB value into uint32_t, could technically be done iteratively but I'm lazy and have been programming this method for 3 hours
@@ -433,7 +439,7 @@ uint32_t brightnessScaleHex(uint32_t hexColor, double brightnessPercentage) {
   return modifiedHexColor;
 }
 
-//Fade from current color map to pair of uint32_t vectors
+//Fade from current HARDWARE color map to pair of uint32_t vectors
 void fadeToVect(std::vector<uint32_t> hexColorVectLarge, std::vector<uint32_t> hexColorVectSmall, float fadeSeconds) {
   //Dump current hardware color vectors to internal one for processing
   //Yes, there is a method to do this directly; it's an array of uint8_t-s, and that is not worth my time to deal with.
@@ -523,9 +529,10 @@ void fadeToVect(std::vector<uint32_t> hexColorVectLarge, std::vector<uint32_t> h
   
 }
 
+//Turn on LEDs and cycle through all available profiles, and then back off again
 void debugCycleLEDs() {
   Serial.println("Debug cycling LEDs...");
-  //Initial circular boot cycle
+  //Animate the LEDs turning on in a circle, for shiggles
   for (int i = 0; i < 24; i++) {
     largeRings.setPixelColor(i, brightnessScaleHex(WARM_WHITE, MAX_OVERRIDE_BRIGHTNESS));
     // largeRings.setLedColor(i, WHITE);
