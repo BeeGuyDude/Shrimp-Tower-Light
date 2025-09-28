@@ -1,7 +1,10 @@
 #include <Adafruit_NeoPixel.h>
 #include "RTClib.h"
 #include <esp_wifi.h>
-#include "ESPAsyncWebServer.h"
+#include "ESPAsyncWebSrv.h"
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <Discord_WebHook.h>
 
 #include <vector>
 #include <map>
@@ -12,6 +15,10 @@
 #define LARGE_LED_COUNT 24
 #define SMALL_LED_PIN   8
 #define SMALL_LED_COUNT 7
+
+//Sensor Pin Configs
+#define THERMAL_PROBE_PIN 4
+#define FLOAT_SWITCH_PIN 21
 
 const double MAX_SUNLIGHT_BRIGHTNESS  {0.4};
 const double MAX_MOONLIGHT_BRIGHTNESS {0.03};
@@ -30,15 +37,26 @@ uint32_t WARM_WHITE_GRBW = 0xCFA6FFFF;
 //Device Instances
 RTC_DS1307 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
 Adafruit_NeoPixel largeRings(LARGE_LED_COUNT, LARGE_LED_PIN, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel smallRing(SMALL_LED_COUNT, SMALL_LED_PIN, NEO_GRBW + NEO_KHZ800);
+
 AsyncWebServer server(80);  //I tried to make this port 69 but HTTP got mad at me, boowomp
+
+OneWire oneWire(THERMAL_PROBE_PIN);
+DallasTemperature sensors(&oneWire);
+DeviceAddress probe;
+#define TEMPERATURE_PRECISION 12  //This is in raw bits for temperature dumps off the data bus
 
 //Working (Global) Variables  
 bool manualOverrideRequested = false; //Stores button presses
 bool manualOverrideTriggered = false; //Stores current override state
 DateTime now;
 DateTime overrideEndTime;
+
+//Sensor variables
+bool isWaterBelowThreshold;
+float tempF;
 
 //Colors stored in two discrete vectors to minimize annoying index offsets when dealing with large and small colorVects
 std::vector<uint32_t> largeRingsColors(LARGE_LED_COUNT, 0x000000);
@@ -58,10 +76,20 @@ std::vector<uint32_t> smallRingColors(SMALL_LED_COUNT, 0x00000000);
 //WIFI CONSTANTS
 const char* ssid = "Shrimpternet Beacon";
 const char* password = "pimpshrimpin";
+const char* external_ssid = "this is just";
+const char* external_password = "my actual wifi lol";
 const char* timeEndpointString = "/time";
 const char* periodStateEndpointString = "/daylight-period";
 const char* overrideEndpointString = "/override";
 const char* overrideEndpointSetString = "/override-set";
+
+//Discord Webhook handler instance and variables
+Discord_Webhook pollWebhook, eventWebhook;
+String poll_webhook_id = "haha";
+String poll_webhook_token = "you";
+String event_webhook_id = "really";
+String event_webhook_token = "thought";
+bool webhookJustTriggered = false;
 
 //DAYLIGHT STATE STORAGE
 typedef enum {
@@ -96,6 +124,23 @@ void setup() {
   }
   now = rtc.now();
 
+  //Thermal probe configuration
+  sensors.begin();
+  Serial.print("Locating devices...");
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+  if (!sensors.getAddress(probe, 0)) {
+    Serial.println("Unable to find address for Device 0");
+  } else {
+    Serial.println("Found thermal probe device successfully!");
+  }
+  sensors.setResolution(probe, TEMPERATURE_PRECISION);
+
+  //Waterline state initialization
+  pinMode(FLOAT_SWITCH_PIN, INPUT);
+  isWaterBelowThreshold = digitalRead(FLOAT_SWITCH_PIN);
+
   //Daylight period state initialization
   if (now.hour() == SUNRISE_HOUR) {
     daylightState = SUNRISE;
@@ -121,14 +166,37 @@ void setup() {
   //Following function is light boot cycle, see implementation for details
   debugCycleLEDs();
 
-  //Wifi Initialization
-  WiFi.mode(WIFI_AP);
+  //Flush any lingering wifi settings
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  //Configure for station and access point 
+  WiFi.mode(WIFI_AP_STA);
+  
+  //Configure station and connect to apartment wifi, and send status update via webhook once complete
+  Serial.print("Connecting to SSID: ");
+  Serial.println(external_ssid);
+  WiFi.useStaticBuffers(true);
+  WiFi.begin(external_ssid, external_password);
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected!");
+  eventWebhook.begin(event_webhook_id, event_webhook_token);
+  pollWebhook.begin(poll_webhook_id, poll_webhook_token);
+  eventWebhook.send("Shrimpternet Beacon has connected to the internet after reset!");
+  pollWebhook.send("Shrimpternet Beacon has connected to the internet after reset!");
+
+  //With outgoing comms configured, initialize local network for remote connection and overrides
   WiFi.softAP(ssid, password);
   Serial.println("Wifi Broadcasting...");
   Serial.println("");
   Serial.print("IP Address: ");
   Serial.println(WiFi.softAPIP());
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  eventWebhook.send("Shrimpternet Beacon is now projecting tap network! - IP: [" + WiFi.softAPIP().toString() + "]");
 
   //WebServer HTTP request handling
   server.on(timeEndpointString, HTTP_GET, [](AsyncWebServerRequest *request){
@@ -167,10 +235,39 @@ void setup() {
 }
 
 void loop() {
+  //Poll sensors and update internal variables
+  isWaterBelowThreshold = digitalRead(FLOAT_SWITCH_PIN);
+  sensors.requestTemperatures();
+  tempF = sensors.getTempF(probe);
+  Serial.println("==== SENSOR POLL ====");
+  Serial.println("Temp: " + String(tempF) + "°F");
+  Serial.println("Float Switch: " + String(isWaterBelowThreshold));
+  Serial.println("=====================");
 
   //Update time from RTC, make sure is valid (If voltage brownout occurs, time will return 00:00 01/01/2000)
   DateTime collectedTime = rtc.now();
   if (collectedTime.year() != 2000) now = collectedTime;
+  Serial.print("Time: ");
+  Serial.print(now.hour(), DEC);
+  Serial.print(":");
+  Serial.print(now.minute(), DEC);
+  Serial.print(":");
+  Serial.println(now.second(), DEC);
+  Serial.println("=====================");
+
+  //Check if sensor update period has elapsed, and update information and post to webhook if so
+  if ((now.minute() % 20) == 0) {   //Post every 20 minutes, update this to be configurable
+    if (!webhookJustTriggered) {
+      String nowString = String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second());
+      pollWebhook.sendEmbed("Current RTC Time", nowString, "F205DB");
+      pollWebhook.sendEmbed("Temperature (°F)", String(tempF), "F205DB"); //Hot pink embed
+      String waterLevelString = isWaterBelowThreshold ? "LOW!" : "Nominal.";
+      pollWebhook.sendEmbed("Water Level", waterLevelString, "F205DB"); //Hot pink embed
+      webhookJustTriggered = true;
+    }
+  } else {
+    webhookJustTriggered = false;
+  }
 
   //Daylight period state update
   updateDaylightPeriod();
@@ -183,6 +280,10 @@ void loop() {
   //If override requested, fade to override brightness
   if (manualOverrideRequested) {
     if (!manualOverrideTriggered) {
+      //Inside check so as to only send an event notification on a new override request
+      eventWebhook.send("Someone has requested an override of the lighting system!");
+      
+      //Fade to override color if request is fresh
       setSunlightColorProfile(MAX_OVERRIDE_BRIGHTNESS);
       fadeToVect(largeRingsColors, smallRingColors, TRANSITION_FADE_TIME_SECONDS);
       manualOverrideTriggered = true;
@@ -411,7 +512,7 @@ void fadeToColor(uint32_t hexColorRGB, uint32_t hexColorRGBW, float fadeSeconds)
         hardwareColorChannelsSmall[i][3] + (float)((channelDiffsVectSmall[i][3] * pow(-1, (int)channelDiffsNegVectSmall[i][3])) / TRANSITION_FADE_STEPS) * (float)step
       )); //God help your soul if you have to debug the above statements
     }
-    Serial.println("SMALL RINGS FADED");
+    // Serial.println("SMALL RINGS FADED");
 
     //Update both rings, and delay for step time increment
     largeRings.show();
@@ -519,7 +620,7 @@ void fadeToVect(std::vector<uint32_t> hexColorVectLarge, std::vector<uint32_t> h
         hardwareColorChannelsSmall[i][3] + (float)((channelDiffsVectSmall[i][3] * pow(-1, (int)channelDiffsNegVectSmall[i][3])) / TRANSITION_FADE_STEPS) * (float)step
       )); //God help your soul if you have to debug the above statements
     }
-    Serial.println("SMALL RINGS FADED");
+    // Serial.println("SMALL RINGS FADED");
 
     //Update both rings, and delay for step time increment
     largeRings.show();
